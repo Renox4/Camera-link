@@ -1,14 +1,49 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
-  <meta charset="UTF-8">
   <title>WatchGarden</title>
-  <script type="module">
-    // Importation Firebase
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-app.js";
-    import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-auth.js";
-    import { getDatabase, ref, set, get } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-database.js";
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; background: #1e1e1e; color: #fff; text-align: center; margin: 0; padding: 0; }
+    header { background: #292929; padding: 1em 0; }
+    main { padding: 1em; }
+    input, button, select { padding: 0.5em; margin: 0.5em; }
+    #chatMessages { height: 200px; overflow-y: scroll; border: 1px solid #555; padding: 1em; margin-top: 1em; background: #2b2b2b; }
+    video { width: 100%; max-width: 500px; margin: 1em auto; border: 2px solid #444; border-radius: 10px; }
+    #remoteVideo { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WatchGarden</h1>
+    <button onclick="signIn()">Se connecter avec Google</button>
+    <button onclick="signOut()">Déconnexion</button>
+  </header>
+  <main>
+    <div>
+      <input id="roomInput" placeholder="Nom de la salle">
+      <button onclick="createRoom()">Créer</button>
+      <button onclick="joinRoom()">Rejoindre</button>
+    </div>
+    <div>
+      <select id="cameraSelect"></select>
+      <button onclick="startCamera()">Activer ma caméra</button>
+    </div>
+    <video id="localVideo" autoplay muted playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="chat">
+      <div id="chatMessages"></div>
+      <input id="chatInput" placeholder="Message...">
+      <button onclick="sendMessage()">Envoyer</button>
+    </div>
+  </main>
 
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <script>
     const firebaseConfig = {
       apiKey: "AIzaSyDVx14DSTur1eM5Sd_NbbuJOT4X9CtqFFI",
       authDomain: "watchgarden-330dd.firebaseapp.com",
@@ -20,75 +55,118 @@
       databaseURL: "https://watchgarden-330dd-default-rtdb.firebaseio.com"
     };
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getDatabase(app);
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.database();
 
-    const loginBtn = document.getElementById("loginBtn");
-    const voirBtn = document.getElementById("voirBtn");
+    let currentUser = null;
+    let currentRoom = null;
 
-    loginBtn.addEventListener("click", () => {
-      const provider = new GoogleAuthProvider();
-      signInWithPopup(auth, provider)
-        .then((result) => {
-          const user = result.user;
-
-          // Enregistrement de l'utilisateur dans la base
-          set(ref(db, "users/" + user.uid), {
-            name: user.displayName,
-            email: user.email
-          });
-
-          alert("Connecté : " + user.displayName);
-
-          // Demande le pseudo à voir
-          const targetName = prompt("Quel est le pseudo de l’utilisateur que tu veux voir ?");
-          if (targetName) {
-            voirInfos(targetName);
-          }
-
-          // Affiche le bouton "voir infos"
-          voirBtn.style.display = "inline-block";
-        })
-        .catch((error) => {
-          alert("Erreur de connexion : " + error.message);
+    auth.onAuthStateChanged(user => {
+      currentUser = user;
+      if (user && currentRoom) {
+        const userRef = db.ref("rooms/" + currentRoom + "/users/" + user.uid);
+        userRef.set({
+          name: user.displayName,
+          joinedAt: Date.now()
         });
+        userRef.onDisconnect().remove();
+      }
     });
 
-    // Fonction pour voir les infos d’un utilisateur
-    function voirInfos(pseudo) {
-      const dbRef = ref(db, "users/");
-      get(dbRef).then((snapshot) => {
-        if (snapshot.exists()) {
-          let found = false;
-          snapshot.forEach((child) => {
-            const data = child.val();
-            if (data.name === pseudo) {
-              alert(`Infos de ${pseudo} :\nNom : ${data.name}\nEmail : ${data.email}`);
-              found = true;
-            }
-          });
-          if (!found) alert("Utilisateur non trouvé !");
-        } else {
-          alert("Aucun utilisateur dans la base.");
-        }
-      });
+    function signIn() {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth.signInWithPopup(provider);
     }
 
-    // Quand on clique sur "voir infos"
-    voirBtn.addEventListener("click", () => {
-      const targetName = prompt("Entrer le pseudo d’un utilisateur connecté :");
-      if (targetName) voirInfos(targetName);
-    });
+    function signOut() {
+      auth.signOut();
+    }
+
+    function createRoom() {
+      const roomName = document.getElementById("roomInput").value;
+      if (!roomName) return alert("Entrez un nom de salle.");
+      const roomRef = db.ref("rooms/" + roomName);
+      roomRef.set({ createdAt: Date.now() });
+      joinRoom(roomName);
+    }
+
+    function joinRoom(roomName = null) {
+      roomName = roomName || document.getElementById("roomInput").value;
+      if (!roomName) return alert("Entrez un nom de salle.");
+      currentRoom = roomName;
+      const roomRef = db.ref("rooms/" + roomName + "/chat");
+      roomRef.off(); // Nettoie les anciens listeners
+
+      roomRef.on("child_added", snapshot => {
+        const data = snapshot.val();
+        const chatMessages = document.getElementById("chatMessages");
+        chatMessages.innerHTML += `<div><strong>${data.name}:</strong> ${data.text}</div>`;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      });
+
+      if (currentUser) {
+        const userRef = db.ref("rooms/" + currentRoom + "/users/" + currentUser.uid);
+        userRef.set({
+          name: currentUser.displayName,
+          joinedAt: Date.now()
+        });
+        userRef.onDisconnect().remove();
+      }
+    }
+
+    function sendMessage() {
+      const input = document.getElementById("chatInput");
+      const text = input.value.trim();
+      if (!text || !currentUser || !currentRoom) return;
+      db.ref("rooms/" + currentRoom + "/chat").push({
+        name: currentUser.displayName,
+        text: text,
+        timestamp: Date.now()
+      });
+      input.value = "";
+    }
+
+    async function startCamera() {
+      const select = document.getElementById("cameraSelect");
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === "videoinput");
+
+      select.innerHTML = videoDevices.map(device =>
+        `<option value="${device.deviceId}">${device.label || "Caméra"}</option>`
+      ).join("");
+
+      const constraints = {
+        video: { deviceId: { exact: select.value || videoDevices[0].deviceId } },
+        audio: true
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const video = document.getElementById("localVideo");
+      video.srcObject = stream;
+
+      setupWebRTC(stream);
+    }
+
+    async function setupWebRTC(localStream) {
+      const peerConnection = new RTCPeerConnection();
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      peerConnection.ontrack = event => {
+        const remoteVideo = document.getElementById("remoteVideo");
+        remoteVideo.srcObject = event.streams[0];
+        remoteVideo.style.display = "block";
+      };
+
+      peerConnection.onconnectionstatechange = () => {
+        if (peerConnection.connectionState === "failed") {
+          alert("Connexion WebRTC échouée.");
+        }
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+    }
   </script>
-</head>
-<body style="text-align: center; font-family: sans-serif; background-color: #111; color: white;">
-
-  <h1>WatchGarden</h1>
-  <p>Regardez des vidéos ensemble, de n’importe où.</p>
-
-  <button id="loginBtn">Se connecter avec Google</button>
-  <button id="voirBtn" style="display: none; margin-left: 10px;">Voir les infos d’un autre</button>
-
 </body>
 </html>
