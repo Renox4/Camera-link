@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WatchGarden</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #121212;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    header {
+      padding: 20px;
+      background-color: #1f1f1f;
+      width: 100%;
+      text-align: center;
+    }
+    main {
+      padding: 40px 20px;
+      text-align: center;
+    }
+    .button {
+      padding: 15px 30px;
+      margin: 10px;
+      font-size: 16px;
+      background-color: #00b894;
+      border: none;
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+    }
+    .input {
+      padding: 10px;
+      margin: 10px;
+      border-radius: 5px;
+      border: none;
+      font-size: 16px;
+    }
+    #room {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 20px;
+    }
+    #chatMessages {
+      width: 300px;
+      height: 200px;
+      overflow-y: auto;
+      background-color: #2c2c2c;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+  </style>
+
+  <!-- Firebase SDK (uniquement en compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+</head>
+
+<body>
+  <div id="authPopup" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.9); display: none; justify-content: center; align-items: center; z-index: 999;">
+    <div style="background: #1f1f1f; padding: 30px; border-radius: 10px; text-align: center;">
+      <h2>Connectez-vous pour continuer</h2>
+      <button id="googleSignIn" class="button">Continuer avec Google</button>
+    </div>
+  </div>
+
+  <header>
+    <h1>WatchGarden</h1>
+    <p>Regardez des vidéos ensemble, de n'importe où.</p>
+  </header>
+
+  <main id="main-section">
+    <button class="button" onclick="createRoom()">Créer une salle</button><br/>
+    <input type="text" class="input" id="roomCode" placeholder="Code de la salle"/>
+    <button class="button" onclick="joinRoom()">Rejoindre</button>
+  </main>
+
+  <div id="room">
+    <h2>Salle en cours</h2>
+    <p id="roomCodeDisplay" style="font-size: 18px; margin-bottom: 10px;"></p>
+    <video id="localVideo" autoplay muted playsinline style="width: 300px; border-radius: 8px;"></video>
+    <select id="cameraSelect" class="input"></select>
+    <div id="chatMessages"></div>
+    <input type="text" id="chatInput" class="input" placeholder="Tapez un message..."/>
+    <button class="button" onclick="sendMessage()">Envoyer</button>
+  </div>
+
+  <footer>
+    &copy; 2025 WatchGarden. Tous droits réservés.
+  </footer>
+
+  <script>
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDVx14DSTur1eM5Sd_NbbuJOT4X9CtqFFI",
+      authDomain: "watchgarden-330dd.firebaseapp.com",
+      projectId: "watchgarden-330dd",
+      storageBucket: "watchgarden-330dd.appspot.com",
+      messagingSenderId: "509977266873",
+      appId: "1:509977266873:web:3c3d99f5db619d0cfda968",
+      measurementId: "G-08VWL08KHF",
+      databaseURL: "https://watchgarden-330dd-default-rtdb.firebaseio.com"
+    };
+
+    // Initialiser Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const auth = firebase.auth();
+
+    let currentRoom = "";
+
+    function createRoom() {
+      const roomId = Math.random().toString(36).substr(2, 8);
+      db.ref("rooms/" + roomId).set({ createdAt: Date.now() });
+      showRoom(roomId);
+    }
+
+    function joinRoom() {
+      const roomId = document.getElementById("roomCode").value.trim();
+      if (roomId !== "") {
+        db.ref("rooms/" + roomId).once("value", snapshot => {
+          if (snapshot.exists()) {
+            showRoom(roomId);
+          } else {
+            alert("Salle introuvable.");
+          }
+        });
+      }
+    }
+
+    function showRoom(roomId) {
+      currentRoom = roomId;
+      document.getElementById("main-section").style.display = "none";
+      document.getElementById("room").style.display = "flex";
+      document.getElementById("roomCodeDisplay").innerText = "Code de la salle : " + roomId;
+      listenForMessages(roomId);
+      startCamera();
+
+      // Affiche le popup si l'utilisateur n'est pas connecté
+      setTimeout(() => {
+        if (!auth.currentUser) {
+          document.getElementById("authPopup").style.display = "flex";
+        }
+      }, 3000);
+    }
+
+    function sendMessage() {
+      const input = document.getElementById("chatInput");
+      const msg = input.value.trim();
+      if (msg !== "") {
+        db.ref("rooms/" + currentRoom + "/messages").push({
+          sender: "Vous",
+          text: msg,
+          timestamp: Date.now()
+        });
+        input.value = "";
+      }
+    }
+
+    function listenForMessages(roomId) {
+      const chat = document.getElementById("chatMessages");
+      chat.innerHTML = "";
+      db.ref("rooms/" + roomId + "/messages").on("child_added", snapshot => {
+        const msg = snapshot.val();
+        const div = document.createElement("div");
+        div.textContent = msg.sender + " : " + msg.text;
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+      });
+    }
+
+    async function startCamera() {
+      const video = document.getElementById("localVideo");
+      const select = document.getElementById("cameraSelect");
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === "videoinput");
+
+      select.innerHTML = "";
+      videoDevices.forEach((device, index) => {
+        const option = document.createElement("option");
+        option.value = device.deviceId;
+        option.text = device.label || `Caméra ${index + 1}`;
+        select.appendChild(option);
+      });
+
+      select.onchange = () => {
+        getStream(select.value);
+      };
+
+      if (videoDevices.length > 0) {
+        getStream(videoDevices[0].deviceId);
+      } else {
+        alert("Aucune caméra détectée.");
+      }
+    }
+
+    async function getStream(deviceId) {
+      const constraints = {
+        video: { deviceId: deviceId ? { exact: deviceId } : undefined }
+      };
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        document.getElementById("localVideo").srcObject = stream;
+      } catch (err) {
+        alert("Erreur caméra : " + err.message);
+      }
+    }
+
+    document.getElementById("googleSignIn").addEventListener("click", () => {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth.signInWithPopup(provider).then((result) => {
+        document.getElementById("authPopup").style.display = "none";
+        console.log("Connecté en tant que", result.user.displayName);
+      }).catch((error) => {
+        alert("Erreur de connexion : " + error.message);
+      });
+    });
+  </script>
+</body>
+</html>
+
